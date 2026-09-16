@@ -21,6 +21,7 @@ table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid
 .notice{padding:11px;border-left:4px solid #079fca;background:#e9faff;border-radius:4px;margin-bottom:16px}.muted{color:#687780;font-size:12px}
 .actions{display:flex;gap:5px;justify-content:center}.actions button{padding:5px 8px;font-size:12px}
 #toast{position:fixed;right:20px;bottom:20px;background:#15232b;color:#fff;padding:12px 16px;border-radius:8px;display:none;z-index:50}
+.modal{display:none;position:fixed;inset:0;background:#0008;z-index:100;align-items:center;justify-content:center;padding:20px}.modal.show{display:flex}.modal-box{background:#fff;width:min(480px,100%);border-radius:12px;padding:20px;box-shadow:0 10px 35px #0004}.modal-box h3{margin:0 0 14px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.change-info{background:#eef8fb;border-left:4px solid #079fca;padding:10px;border-radius:5px;margin:10px 0;font-size:13px}
 @media(max-width:850px){.grid,.kpis{grid-template-columns:1fr 1fr}.report-head{grid-template-columns:1fr 110px 90px}.report-title{font-size:15px}}
 @media(max-width:560px){.grid,.kpis{grid-template-columns:1fr}.container{padding:0 8px}th,td{font-size:11px;padding:6px}.report-head{grid-template-columns:1fr 75px 70px}}
 @media print{header,.nav,.no-print,#toast{display:none!important}.container{margin:0;padding:0;max-width:none}.card{box-shadow:none;padding:0}}
@@ -96,7 +97,16 @@ table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid
 
 <section id="historial" class="page">
 <div class="card"><h2>Historial de informes</h2><div id="historyTable"></div></div>
+<div class="card"><h2>Registro de cambios de grupo</h2><div id="transferTable"></div></div>
 </section>
+</div>
+<div id="changeModal" class="modal" onclick="if(event.target===this)closeChange()">
+  <div class="modal-box">
+    <h3>Cambiar de grupo</h3>
+    <div class="change-info">Persona: <b id="changePersonName"></b><br>Grupo actual: <b id="changeCurrentGroup"></b></div>
+    <div class="field"><label>Nuevo grupo</label><select id="changeGroup"></select></div>
+    <div class="modal-actions"><button onclick="closeChange()">Cancelar</button><button class="primary" onclick="confirmChange()">Cambiar de grupo</button></div>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -109,9 +119,9 @@ function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math
 function initialDB(){
  const names=['Adrian Edmundo','Adrian, Rosa de','Alvarado Cecilia de Vino','Coca Carlos','Coca Ezequiel','Coca Gabriel','Coca, Melania de','Espinoza Foronda Melvy','Gomez Angelica','Gutierrez Ana Carolina','Gutiérrez Belén','Gutierrez Torrez Wilson','Gutierrez, Isabel de','Huarachi Eros'];
  const gid='g8';
- return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{}};
+ return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{},transfers:[]};
 }
-function load(){try{let x=JSON.parse(localStorage.getItem(KEY));return x||initialDB()}catch(e){return initialDB()}}
+function load(){try{let x=JSON.parse(localStorage.getItem(KEY));if(!x)return initialDB();x.transfers=Array.isArray(x.transfers)?x.transfers:[];return x}catch(e){return initialDB()}}
 function save(){localStorage.setItem(KEY,JSON.stringify(db));document.getElementById('saveStatus').textContent='✓ Guardado';setTimeout(()=>document.getElementById('saveStatus').textContent='✓ Guardado local',700)}
 function toast(s){let t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',1800)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -125,7 +135,7 @@ function fillSelect(id,all=false){
 function renderAll(){
  document.getElementById('month').innerHTML=months.map((m,i)=>`<option value="${i}">${m}</option>`).join('');
  if(document.getElementById('month').dataset.ready!=='1'){document.getElementById('month').value=new Date().getMonth();document.getElementById('year').value=new Date().getFullYear();document.getElementById('month').dataset.ready='1'}
- fillSelect('pGroup');fillSelect('reportGroup');renderPeople();renderGroups();renderReport();renderHistory();
+ fillSelect('pGroup');fillSelect('reportGroup');renderPeople();renderGroups();renderReport();renderHistory();renderTransfers();
  document.getElementById('kPeople').textContent=db.people.length;document.getElementById('kGroups').textContent=db.groups.length;document.getElementById('kReports').textContent=Object.keys(db.reports).length;
  document.getElementById('kCurrent').textContent=db.people.filter(p=>p.group===document.getElementById('reportGroup').value).length;
 }
@@ -143,11 +153,34 @@ function editPerson(id){
  const status=confirm('¿La persona está activa?');p.status=status?'Activo':'Inactivo';
  save();renderAll();
 }
+function openChange(id){
+ const p=db.people.find(x=>x.id===id);if(!p)return;
+ const current=db.groups.find(g=>g.id===p.group);
+ const select=document.getElementById('changeGroup');
+ select.innerHTML=db.groups.filter(g=>g.id!==p.group).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+ if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');
+ document.getElementById('changePersonName').textContent=p.name;
+ document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';
+ select.dataset.personId=id;
+ document.getElementById('changeModal').classList.add('show');
+}
+function closeChange(){document.getElementById('changeModal').classList.remove('show')}
+function confirmChange(){
+ const select=document.getElementById('changeGroup'),id=select.dataset.personId,p=db.people.find(x=>x.id===id);
+ if(!p||!select.value)return;
+ const from=db.groups.find(g=>g.id===p.group),to=db.groups.find(g=>g.id===select.value);
+ if(!to)return;
+ if(from?.id===to.id)return;
+ if(!Array.isArray(db.transfers))db.transfers=[];
+ db.transfers.push({id:uid(),personId:p.id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt:new Date().toISOString()});
+ p.group=to.id;
+ save();closeChange();renderAll();toast(`${p.name} ahora pertenece a ${to.name}`);
+}
 function removePerson(id){if(confirm('¿Eliminar esta persona?')){db.people=db.people.filter(p=>p.id!==id);save();renderAll()}}
 function renderPeople(){
  const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();
  const arr=db.people.filter(p=>p.name.toLowerCase().includes(q));
- document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>g.id===p.group)?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
+ document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>g.id===p.group)?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
 }
 function addGroup(){
  const name=document.getElementById('gName').value.trim();if(!name)return alert('Escribe el nombre del grupo.');
@@ -179,6 +212,11 @@ function saveReport(){db.reports[reportKey()]={savedAt:new Date().toISOString(),
 function renderHistory(){
  const entries=Object.entries(db.reports).sort((a,b)=>b[0].localeCompare(a[0]));
  document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>x.id===gid);return `<tr><td>${months[+m]} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v.rows||{}).length}</td><td>${new Date(v.savedAt).toLocaleString('es-BO')}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>';
+}
+function renderTransfers(){
+ const el=document.getElementById('transferTable');if(!el)return;
+ const rows=(db.transfers||[]).slice().sort((a,b)=>b.changedAt.localeCompare(a.changedAt));
+ el.innerHTML=rows.length?`<table><thead><tr><th>Fecha</th><th>Persona</th><th>Grupo anterior</th><th>Nuevo grupo</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${new Date(t.changedAt).toLocaleString('es-BO')}</td><td>${esc(t.personName)}</td><td>${esc(t.fromGroupName)}</td><td>${esc(t.toGroupName)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay cambios de grupo registrados.</div>';
 }
 function openReport(k){let [y,m,g]=k.split('|');document.getElementById('year').value=y;document.getElementById('month').value=m;document.getElementById('reportGroup').value=g;go('informe')}
 function deleteReport(k){if(confirm('¿Eliminar este informe del historial?')){delete db.reports[k];save();renderAll()}}
