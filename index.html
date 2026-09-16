@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#079fca">
+<link rel="manifest" href="manifest.json">
+<title>Administrador de Grupos</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#eef3f6;color:#17232c}
+header{background:#079fca;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;gap:15px;position:sticky;top:0;z-index:20;box-shadow:0 2px 7px #0002}
+header h1{font-size:21px;margin:0 0 3px}header small{opacity:.9}
+.container{max-width:1300px;margin:20px auto;padding:0 15px}.nav{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+button{border:0;border-radius:7px;padding:9px 13px;font-weight:700;cursor:pointer;background:#e3ebef;color:#20303a}button.primary{background:#079fca;color:white}button.danger{background:#ffe0e0;color:#a00000}button.success{background:#d9f5e2;color:#126329}
+.page{display:none}.page.active{display:block}.card{background:white;border-radius:11px;padding:16px;margin-bottom:16px;box-shadow:0 2px 9px #0001}
+h2{font-size:19px;margin:0 0 13px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.field label{font-size:12px;font-weight:bold;display:block;margin-bottom:5px;color:#53616b}.field input,.field select,.field textarea{width:100%;padding:9px;border:1px solid #c8d2d8;border-radius:6px;background:#fff}.field textarea{min-height:70px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid #111;padding:8px;font-size:13px}th{background:#f3f3f3;text-align:center}td.center{text-align:center}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.kpi{background:white;padding:16px;border-radius:10px;box-shadow:0 2px 8px #0001}.kpi span{color:#61707a;font-size:13px}.kpi strong{display:block;font-size:28px;margin-top:5px}
+.report-head{display:grid;grid-template-columns:1fr 180px 150px}.report-title{background:#079fca;color:#fff;font-size:21px;font-weight:800;padding:9px}.report-month,.report-group{background:#bdeff8;text-align:center;padding:7px;font-weight:800}.report-group strong{font-size:34px;display:block;line-height:1}
+.empty{text-align:center;color:#697780;padding:30px}.badge{padding:3px 8px;border-radius:15px;background:#def4fb;font-size:12px;font-weight:bold}
+.notice{padding:11px;border-left:4px solid #079fca;background:#e9faff;border-radius:4px;margin-bottom:16px}.muted{color:#687780;font-size:12px}
+.actions{display:flex;gap:5px;justify-content:center}.actions button{padding:5px 8px;font-size:12px}
+#toast{position:fixed;right:20px;bottom:20px;background:#15232b;color:#fff;padding:12px 16px;border-radius:8px;display:none;z-index:50}
+@media(max-width:850px){.grid,.kpis{grid-template-columns:1fr 1fr}.report-head{grid-template-columns:1fr 110px 90px}.report-title{font-size:15px}}
+@media(max-width:560px){.grid,.kpis{grid-template-columns:1fr}.container{padding:0 8px}th,td{font-size:11px;padding:6px}.report-head{grid-template-columns:1fr 75px 70px}}
+@media print{header,.nav,.no-print,#toast{display:none!important}.container{margin:0;padding:0;max-width:none}.card{box-shadow:none;padding:0}}
+</style>
+</head>
+<body>
+<header>
+<div><h1>Administrador de Grupos</h1><small>Personas · grupos · informes mensuales</small></div>
+<div id="saveStatus">✓ Guardado local</div>
+</header>
+<div class="container">
+<div class="nav no-print">
+<button onclick="go('inicio')" class="primary">Inicio</button>
+<button onclick="go('personas')">Personas</button>
+<button onclick="go('grupos')">Grupos</button>
+<button onclick="go('informe')">Informe mensual</button>
+<button onclick="go('historial')">Historial</button>
+<button onclick="backup()">Copia de seguridad</button>
+<button onclick="document.getElementById('restoreFile').click()">Restaurar</button>
+<input id="restoreFile" type="file" accept=".json" hidden onchange="restore(this.files[0])">
+</div>
+
+<section id="inicio" class="page active">
+<div class="notice"><b>Aplicación lista para probar.</b> Puedes crear personas y grupos, completar el informe mensual y conservar un historial. Usa “Copia de seguridad” para guardar una copia de todos los datos.</div>
+<div class="kpis">
+<div class="kpi"><span>Personas</span><strong id="kPeople">0</strong></div>
+<div class="kpi"><span>Grupos</span><strong id="kGroups">0</strong></div>
+<div class="kpi"><span>Informes guardados</span><strong id="kReports">0</strong></div>
+<div class="kpi"><span>Integrantes del grupo seleccionado</span><strong id="kCurrent">0</strong></div>
+</div>
+<div class="card" style="margin-top:16px"><h2>Acciones rápidas</h2><div class="toolbar">
+<button class="primary" onclick="go('personas')">+ Agregar persona</button>
+<button onclick="go('grupos')">Administrar grupos</button>
+<button onclick="go('informe')">Abrir informe</button>
+<button onclick="window.print()">Imprimir</button>
+</div></div>
+</section>
+
+<section id="personas" class="page">
+<div class="card"><h2>Agregar persona</h2>
+<div class="grid">
+<div class="field"><label>Nombre completo</label><input id="pName" placeholder="Nombre y apellido"></div>
+<div class="field"><label>Grupo</label><select id="pGroup"></select></div>
+<div class="field"><label>Estado</label><select id="pStatus"><option>Activo</option><option>Inactivo</option></select></div>
+<div class="field"><label>Observación</label><input id="pNote"></div>
+</div><div class="toolbar" style="margin-top:12px"><button class="primary" onclick="addPerson()">Agregar</button></div></div>
+<div class="card"><div class="toolbar"><h2 style="margin-right:auto">Personas</h2><input id="peopleSearch" oninput="renderPeople()" placeholder="Buscar..." style="padding:9px;border:1px solid #ccd5da;border-radius:6px"></div><div id="peopleTable"></div></div>
+</section>
+
+<section id="grupos" class="page">
+<div class="card"><h2>Agregar grupo</h2><div class="grid">
+<div class="field"><label>Nombre</label><input id="gName" placeholder="Grupo 8"></div>
+<div class="field"><label>Número</label><input id="gNumber" type="number" min="1"></div>
+<div class="field"><label>Descripción</label><input id="gDescription"></div>
+</div><div class="toolbar" style="margin-top:12px"><button class="primary" onclick="addGroup()">Crear grupo</button></div></div>
+<div class="card"><h2>Grupos</h2><div id="groupsTable"></div></div>
+</section>
+
+<section id="informe" class="page">
+<div class="card no-print"><h2>Informe mensual</h2><div class="grid">
+<div class="field"><label>Mes</label><select id="month" onchange="renderReport()"></select></div>
+<div class="field"><label>Año</label><input id="year" type="number" onchange="renderReport()"></div>
+<div class="field"><label>Grupo</label><select id="reportGroup" onchange="renderReport()"></select></div>
+<div class="field"><label>Buscar</label><input id="reportSearch" oninput="renderReport()" placeholder="Nombre..."></div>
+</div><div class="toolbar" style="margin-top:12px">
+<button class="primary" onclick="saveReport()">Guardar informe</button><button onclick="window.print()">Imprimir / PDF</button><button onclick="exportCSV()">Exportar CSV</button>
+</div></div>
+<div class="card">
+<div class="report-head"><div class="report-title">INFORME DE PREDICACIÓN</div><div class="report-month">MES: <span id="rMonth"></span></div><div class="report-group">GRUPO: <strong id="rGroup"></strong></div></div>
+<div id="reportTable"></div>
+</div>
+</section>
+
+<section id="historial" class="page">
+<div class="card"><h2>Historial de informes</h2><div id="historyTable"></div></div>
+</section>
+</div>
+<div id="toast"></div>
+
+<script>
+const KEY='admin_grupos_final_v2';
+const months=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+let db=load();
+
+function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random())}
+function initialDB(){
+ const names=['Adrian Edmundo','Adrian, Rosa de','Alvarado Cecilia de Vino','Coca Carlos','Coca Ezequiel','Coca Gabriel','Coca, Melania de','Espinoza Foronda Melvy','Gomez Angelica','Gutierrez Ana Carolina','Gutiérrez Belén','Gutierrez Torrez Wilson','Gutierrez, Isabel de','Huarachi Eros'];
+ const gid='g8';
+ return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{}};
+}
+function load(){try{let x=JSON.parse(localStorage.getItem(KEY));return x||initialDB()}catch(e){return initialDB()}}
+function save(){localStorage.setItem(KEY,JSON.stringify(db));document.getElementById('saveStatus').textContent='✓ Guardado';setTimeout(()=>document.getElementById('saveStatus').textContent='✓ Guardado local',700)}
+function toast(s){let t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',1800)}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(page).classList.add('active');renderAll()}
+function fillSelect(id,all=false){
+ const el=document.getElementById(id);if(!el)return;
+ const old=el.value;
+ el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+ if(db.groups.some(g=>g.id===old))el.value=old; else if(el.options.length)el.value=el.options[0].value;
+}
+function renderAll(){
+ document.getElementById('month').innerHTML=months.map((m,i)=>`<option value="${i}">${m}</option>`).join('');
+ if(document.getElementById('month').dataset.ready!=='1'){document.getElementById('month').value=new Date().getMonth();document.getElementById('year').value=new Date().getFullYear();document.getElementById('month').dataset.ready='1'}
+ fillSelect('pGroup');fillSelect('reportGroup');renderPeople();renderGroups();renderReport();renderHistory();
+ document.getElementById('kPeople').textContent=db.people.length;document.getElementById('kGroups').textContent=db.groups.length;document.getElementById('kReports').textContent=Object.keys(db.reports).length;
+ document.getElementById('kCurrent').textContent=db.people.filter(p=>p.group===document.getElementById('reportGroup').value).length;
+}
+function addPerson(){
+ const name=document.getElementById('pName').value.trim();if(!name)return alert('Escribe el nombre.');
+ db.people.push({id:uid(),name,group:document.getElementById('pGroup').value,status:document.getElementById('pStatus').value,note:document.getElementById('pNote').value.trim()});
+ document.getElementById('pName').value='';document.getElementById('pNote').value='';save();renderAll();toast('Persona agregada');
+}
+function editPerson(id){
+ const p=db.people.find(x=>x.id===id);if(!p)return;
+ const name=prompt('Nombre completo:',p.name);if(name===null)return;
+ p.name=name.trim()||p.name;
+ const group=prompt('ID del grupo para asignar:\n'+db.groups.map(g=>g.id+' = '+g.name).join('\n'),p.group);
+ if(group!==null&&db.groups.some(g=>g.id===group))p.group=group;
+ const status=confirm('¿La persona está activa?');p.status=status?'Activo':'Inactivo';
+ save();renderAll();
+}
+function removePerson(id){if(confirm('¿Eliminar esta persona?')){db.people=db.people.filter(p=>p.id!==id);save();renderAll()}}
+function renderPeople(){
+ const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();
+ const arr=db.people.filter(p=>p.name.toLowerCase().includes(q));
+ document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>g.id===p.group)?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
+}
+function addGroup(){
+ const name=document.getElementById('gName').value.trim();if(!name)return alert('Escribe el nombre del grupo.');
+ db.groups.push({id:uid(),name,number:document.getElementById('gNumber').value?Number(document.getElementById('gNumber').value):'',description:document.getElementById('gDescription').value.trim()});
+ document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';save();renderAll();toast('Grupo creado');
+}
+function editGroup(id){const g=db.groups.find(x=>x.id===id);const n=prompt('Nombre del grupo:',g.name);if(n&&n.trim()){g.name=n.trim();save();renderAll()}}
+function removeGroup(id){
+ if(db.people.some(p=>p.group===id))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');
+ if(confirm('¿Eliminar este grupo?')){db.groups=db.groups.filter(g=>g.id!==id);save();renderAll()}
+}
+function renderGroups(){
+ document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>p.group===g.id).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>';
+}
+function reportKey(){return `${document.getElementById('year').value}|${document.getElementById('month').value}|${document.getElementById('reportGroup').value}`}
+function currentRows(){
+ const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};
+ return db.people.filter(p=>p.group===gid&&p.name.toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}));
+}
+function renderReport(){
+ const g=db.groups.find(x=>x.id===document.getElementById('reportGroup').value);
+ document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];
+ document.getElementById('rGroup').textContent=g?.number||g?.name||'';
+ const rows=currentRows();
+ document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>';
+}
+function collect(){let rows={};document.querySelectorAll('#reportTable input[data-id]').forEach(x=>{rows[x.dataset.id]??={};rows[x.dataset.id][x.dataset.f]=x.value});return rows}
+function saveReport(){db.reports[reportKey()]={savedAt:new Date().toISOString(),rows:collect()};save();renderAll();toast('Informe guardado')}
+function renderHistory(){
+ const entries=Object.entries(db.reports).sort((a,b)=>b[0].localeCompare(a[0]));
+ document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>x.id===gid);return `<tr><td>${months[+m]} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v.rows||{}).length}</td><td>${new Date(v.savedAt).toLocaleString('es-BO')}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>';
+}
+function openReport(k){let [y,m,g]=k.split('|');document.getElementById('year').value=y;document.getElementById('month').value=m;document.getElementById('reportGroup').value=g;go('informe')}
+function deleteReport(k){if(confirm('¿Eliminar este informe del historial?')){delete db.reports[k];save();renderAll()}}
+function exportCSV(){
+ const rows=currentRows(),lines=[['N°','NOMBRE','PREDICÓ','ESTUDIOS','HORAS','OBSERVACIONES'],...rows.map((r,i)=>[i+1,r.name,r.predico,r.estudios,r.horas,r.obs])];
+ const csv='\ufeff'+lines.map(a=>a.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`informe_${months[+document.getElementById('month').value]}_${document.getElementById('year').value}.csv`;a.click();URL.revokeObjectURL(a.href);
+}
+function backup(){
+ const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_administrador_grupos.json';a.click();URL.revokeObjectURL(a.href);toast('Copia de seguridad creada');
+}
+function restore(file){
+ if(!file)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.groups||!x.people||!x.reports)throw 0;db=x;save();renderAll();toast('Datos restaurados')}catch(e){alert('El archivo no es un respaldo válido.')}};r.readAsText(file)
+}
+renderAll();
+if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body></html>
