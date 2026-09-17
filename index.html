@@ -115,78 +115,386 @@ const SUPABASE_URL='https://eoyyluquwqfgyhhknvbk.supabase.co';
 const SUPABASE_KEY='sb_publishable_ZoqCP53tUwCTCGpYavWl5Q_JNcPJ_T9';
 const KEY='admin_grupos_cloud_cache_v1';
 const months=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+
 let db=initialDB();
 let cloudReady=false;
 
-function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random())}
+function uid(){return crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random()}
 function initialDB(){
- const names=['Adrian Edmundo','Adrian, Rosa de','Alvarado Cecilia de Vino','Coca Carlos','Coca Ezequiel','Coca Gabriel','Coca, Melania de','Espinoza Foronda Melvy','Gomez Angelica','Gutierrez Ana Carolina','Gutiérrez Belén','Gutierrez Torrez Wilson','Gutierrez, Isabel de','Huarachi Eros'];
- const gid='g8';
- return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{},transfers:[]};
+  const names=['Adrian Edmundo','Adrian, Rosa de','Alvarado Cecilia de Vino','Coca Carlos','Coca Ezequiel','Coca Gabriel','Coca, Melania de','Espinoza Foronda Melvy','Gomez Angelica','Gutierrez Ana Carolina','Gutiérrez Belén','Gutierrez Torrez Wilson','Gutierrez, Isabel de','Huarachi Eros'];
+  const gid='g8';
+  return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{},transfers:[]};
 }
-function loadLocal(){try{const x=JSON.parse(localStorage.getItem(KEY));if(!x)return null;x.groups=Array.isArray(x.groups)?x.groups:[];x.people=Array.isArray(x.people)?x.people:[];x.reports=x.reports&&typeof x.reports==='object'?x.reports:{};x.transfers=Array.isArray(x.transfers)?x.transfers:[];x.groups.forEach(g=>g.id=String(g.id));x.people.forEach(p=>p.group=String(p.group??''));return x}catch(e){return null}}
-function saveLocal(){localStorage.setItem(KEY,JSON.stringify(db));document.getElementById('saveStatus').textContent=cloudReady?'✓ Guardado en la nube':'✓ Guardado local';setTimeout(()=>document.getElementById('saveStatus').textContent=cloudReady?'✓ Nube conectada':'✓ Guardado local',1200)}
-function toast(s){let t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',2200)}
+
+function loadLocal(){
+  try{
+    const x=JSON.parse(localStorage.getItem(KEY));
+    if(!x)return null;
+    x.groups=Array.isArray(x.groups)?x.groups:[];
+    x.people=Array.isArray(x.people)?x.people:[];
+    x.reports=x.reports&&typeof x.reports==='object'?x.reports:{};
+    x.transfers=Array.isArray(x.transfers)?x.transfers:[];
+    x.groups.forEach(g=>{g.id=String(g.id);g.name=String(g.name??'');g.number=g.number??'';g.description=String(g.description??'')});
+    x.people.forEach(p=>{p.id=String(p.id);p.name=String(p.name??'');p.group=String(p.group??'');p.status=String(p.status??'Activo');p.note=String(p.note??'')});
+    x.transfers=x.transfers.map(t=>({
+      id:String(t.id??uid()),personId:String(t.personId??t.person_id??''),
+      personName:String(t.personName??t.person_name??''),
+      fromGroupId:String(t.fromGroupId??t.from_group_id??''),
+      fromGroupName:String(t.fromGroupName??t.from_group_name??'Sin grupo'),
+      toGroupId:String(t.toGroupId??t.to_group_id??''),
+      toGroupName:String(t.toGroupName??t.to_group_name??''),
+      changedAt:String(t.changedAt??t.changed_at??'')
+    }));
+    return x;
+  }catch(e){console.error('Error leyendo datos locales:',e);return null}
+}
+
+function saveLocal(){
+  localStorage.setItem(KEY,JSON.stringify(db));
+  const status=document.getElementById('saveStatus');
+  if(status)status.textContent=cloudReady?'✓ Guardado en la nube':'✓ Guardado local';
+  setTimeout(()=>{if(status)status.textContent=cloudReady?'✓ Nube conectada':'✓ Guardado local'},1200);
+}
+
+function toast(s){
+  const t=document.getElementById('toast');
+  if(!t)return;
+  t.textContent=s;t.style.display='block';
+  setTimeout(()=>t.style.display='none',2200);
+}
+
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(page).classList.add('active');renderAll()}
+function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById(page);if(el)el.classList.add('active');renderAll()}
 function headers(extra={}){return Object.assign({'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'application/json'},extra)}
 async function api(path,options={}){const r=await fetch(SUPABASE_URL+'/rest/v1/'+path,Object.assign({headers:headers()},options));if(!r.ok){const t=await r.text();throw new Error(t||('HTTP '+r.status))}return r.status===204?null:r.json()}
 async function upsert(table,rows){if(!rows.length)return[];return api(table,{method:'POST',headers:headers({'Prefer':'resolution=merge-duplicates,return=representation'}),body:JSON.stringify(rows)})}
 async function updateRow(table,id,data){return api(table+'?id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:headers({'Prefer':'return=representation'}),body:JSON.stringify(data)})}
 async function deleteRow(table,id){return api(table+'?id=eq.'+encodeURIComponent(id),{method:'DELETE',headers:headers({'Prefer':'return=minimal'})})}
+
 function cloudToDB(g,p,r,t){
- const groups=(g||[]).map(x=>({id:String(x.id),name:x.nombre??x.name??'',number:x.numero??x.number??'',description:x.descripcion??x.description??''}));
- const people=(p||[]).map(x=>({id:String(x.id),name:x.nombre??x.name??'',group:String(x.grupo_id??x.group_id??''),status:x.estado??x.status??'Activo',note:x.observacion??x.note??''}));
- const reports={};(r||[]).forEach(x=>{reports[`${x.year}|${x.month}|${x.group_id}`]={savedAt:x.saved_at,rows:x.rows||{}}});
- const transfers=(t||[]).map(x=>({id:String(x.id),personId:x.person_id?String(x.person_id):'',personName:x.person_name||'',fromGroupId:x.from_group_id?String(x.from_group_id):'',fromGroupName:x.from_group_name||'Sin grupo',toGroupId:x.to_group_id?String(x.to_group_id):'',toGroupName:x.to_group_name||'',changedAt:x.changed_at}));
- return {groups,people,reports,transfers};
+  const groups=(g||[]).map(x=>({id:String(x.id),name:String(x.nombre??x.name??''),number:x.numero??x.number??'',description:String(x.descripcion??x.description??'')}));
+  const people=(p||[]).map(x=>({id:String(x.id),name:String(x.nombre??x.name??''),group:String(x.grupo_id??x.group_id??''),status:String(x.estado??x.status??'Activo'),note:String(x.observacion??x.note??'')}));
+  const reports={};
+  (r||[]).forEach(x=>{
+    if(x.year!=null&&x.month!=null&&x.group_id!=null)
+      reports[`${x.year}|${x.month}|${x.group_id}`]={savedAt:x.saved_at||x.savedAt||new Date().toISOString(),rows:x.rows&&typeof x.rows==='object'?x.rows:{}};
+  });
+  const transfers=(t||[]).map(x=>({
+    id:String(x.id??uid()),
+    personId:String(x.person_id??x.personId??''),
+    personName:String(x.person_name??x.personName??''),
+    fromGroupId:String(x.from_group_id??x.fromGroupId??''),
+    fromGroupName:String(x.from_group_name??x.fromGroupName??'Sin grupo'),
+    toGroupId:String(x.to_group_id??x.toGroupId??''),
+    toGroupName:String(x.to_group_name??x.toGroupName??''),
+    changedAt:String(x.changed_at??x.changedAt??'')
+  }));
+  return {groups,people,reports,transfers};
 }
-async function migrateLocal(local,cloud){
- const groupMap={};
- for(const lg of local.groups){let cg=cloud.groups.find(g=>g.name.trim().toLowerCase()===String(lg.name).trim().toLowerCase());if(!cg){const rows=await upsert('grupos',[{nombre:lg.name,numero:lg.number||null,descripcion:lg.description||''}]);cg={id:String(rows[0].id),name:rows[0].nombre,number:rows[0].numero??'',description:rows[0].descripcion||''};cloud.groups.push(cg)}groupMap[String(lg.id)]=cg.id}
- if(!cloud.people.length && local.people.length){const rows=local.people.map(p=>({id:uid(),nombre:p.name,grupo_id:groupMap[String(p.group)]||null,estado:p.status||'Activo',observacion:p.note||''}));await upsert('personas',rows);cloud.people.push(...rows.map(x=>({id:String(x.id),name:x.nombre,group:String(x.grupo_id||''),status:x.estado,note:x.observacion})))}
- return cloud;
+
+/* Sincroniza lo que exista localmente y falte en la nube.
+   También conserva los grupos creados mientras la nube estaba desconectada. */
+async function syncLocalToCloud(local,cloud){
+  if(!local)return cloud;
+  const groupMap={};
+
+  for(const lg of local.groups){
+    let cg=cloud.groups.find(g=>g.name.trim().toLowerCase()===String(lg.name).trim().toLowerCase());
+    if(!cg){
+      const rows=await upsert('grupos',[{nombre:String(lg.name||'Grupo'),numero:lg.number||null,descripcion:lg.description||''}]);
+      if(rows&&rows[0]){
+        cg={id:String(rows[0].id),name:String(rows[0].nombre??lg.name),number:rows[0].numero??lg.number??'',description:String(rows[0].descripcion??lg.description??'')};
+        cloud.groups.push(cg);
+      }
+    }
+    if(cg)groupMap[String(lg.id)]=String(cg.id);
+  }
+
+  const existingNames=new Set(cloud.people.map(p=>p.name.trim().toLowerCase()).filter(Boolean));
+  const missing=local.people.filter(p=>p.name.trim()&&!existingNames.has(p.name.trim().toLowerCase()));
+  if(missing.length){
+    const rows=missing.map(p=>({
+      id:uid(),nombre:p.name,grupo_id:groupMap[String(p.group)]||String(p.group)||null,
+      estado:p.status||'Activo',observacion:p.note||''
+    }));
+    const inserted=await upsert('personas',rows);
+    for(const x of inserted||[]){
+      cloud.people.push({id:String(x.id),name:String(x.nombre??''),group:String(x.grupo_id??''),status:String(x.estado??'Activo'),note:String(x.observacion??'')});
+    }
+  }
+
+  /* Si una persona local pertenece a un grupo creado sin conexión,
+     actualizamos su grupo usando el ID real de Supabase. */
+  for(const lp of local.people){
+    const newGroup=groupMap[String(lp.group)];
+    if(!newGroup)continue;
+    const cp=cloud.people.find(p=>p.name.trim().toLowerCase()===lp.name.trim().toLowerCase());
+    if(cp&&String(cp.group)!==String(newGroup)){
+      await updateRow('personas',cp.id,{grupo_id:newGroup});
+      cp.group=String(newGroup);
+    }
+  }
+  return cloud;
 }
+
 async function initCloud(){
- document.getElementById('saveStatus').textContent='☁ Conectando...';
- const local=loadLocal();
- try{
-  let [g,p,r,t]=await Promise.all([api('grupos?select=*'),api('personas?select=*'),api('informes?select=*'),api('cambios_grupo?select=*')]);
-  let cloud=cloudToDB(g,p,r,t);
-  if(local && local.people.length && cloud.people.length===0) cloud=await migrateLocal(local,cloud);
-  if(cloud.groups.length===0){const id=uid();await upsert('grupos',[{id,nombre:'Grupo 8',numero:8,descripcion:''}]);cloud.groups=[{id,name:'Grupo 8',number:8,description:''}];}
-  if(cloud.people.length===0){const g8=cloud.groups.find(g=>g.name==='Grupo 8')||cloud.groups[0];const names=initialDB().people.map(p=>p.name);const rows=names.map(p=>({id:uid(),nombre:p,grupo_id:g8.id,estado:'Activo',observacion:''}));await upsert('personas',rows);cloud.people=rows.map(x=>({id:String(x.id),name:x.nombre,group:String(x.grupo_id),status:x.estado,note:''}));}
-  db=cloud;cloudReady=true;saveLocal();renderAll();toast('Conectado a Supabase');
- }catch(e){console.error(e);cloudReady=false;db=local||initialDB();saveLocal();renderAll();toast('No se pudo conectar a la nube; usando datos locales')}
+  const status=document.getElementById('saveStatus');
+  if(status)status.textContent='☁ Conectando...';
+  const local=loadLocal();
+
+  try{
+    const [g,p,r,t]=await Promise.all([
+      api('grupos?select=*'),
+      api('personas?select=*'),
+      api('informes?select=*'),
+      api('cambios_grupo?select=*')
+    ]);
+
+    let cloud=cloudToDB(g,p,r,t);
+
+    /* Importante: no solo migrar cuando la nube está vacía.
+       Así se recuperan grupos creados localmente durante una desconexión. */
+    cloud=await syncLocalToCloud(local,cloud);
+
+    if(cloud.groups.length===0){
+      const rows=await upsert('grupos',[{nombre:'Grupo 8',numero:8,descripcion:''}]);
+      if(rows&&rows[0])cloud.groups=[{id:String(rows[0].id),name:String(rows[0].nombre??'Grupo 8'),number:rows[0].numero??8,description:String(rows[0].descripcion??'')}];
+    }
+
+    if(cloud.people.length===0){
+      const g8=cloud.groups.find(g=>g.name==='Grupo 8')||cloud.groups[0];
+      const rows=initialDB().people.map(p=>({id:uid(),nombre:p.name,grupo_id:g8?.id||null,estado:'Activo',observacion:''}));
+      const inserted=await upsert('personas',rows);
+      cloud.people=(inserted||[]).map(x=>({id:String(x.id),name:String(x.nombre??''),group:String(x.grupo_id??''),status:String(x.estado??'Activo'),note:String(x.observacion??'')}));
+    }
+
+    db=cloud;
+    cloudReady=true;
+    saveLocal();
+    renderAll();
+    toast('Conectado a Supabase');
+  }catch(e){
+    console.error('Error de conexión/sincronización con Supabase:',e);
+    cloudReady=false;
+    db=local||initialDB();
+    saveLocal();
+    renderAll();
+    toast('No se pudo conectar a la nube; usando datos locales');
+  }
 }
-async function save(){saveLocal();if(!cloudReady)return}
-function fillSelect(id,all=false){const el=document.getElementById(id);if(!el)return;const old=el.value;el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');if(db.groups.some(g=>String(g.id)===String(old)))el.value=old;else if(el.options.length)el.value=el.options[0].value}
-function renderAll(){document.getElementById('month').innerHTML=months.map((m,i)=>`<option value="${i}">${m}</option>`).join('');if(document.getElementById('month').dataset.ready!=='1'){document.getElementById('month').value=new Date().getMonth();document.getElementById('year').value=new Date().getFullYear();document.getElementById('month').dataset.ready='1'}fillSelect('pGroup');fillSelect('reportGroup');renderPeople();renderGroups();renderReport();renderHistory();renderTransfers();document.getElementById('kPeople').textContent=db.people.length;document.getElementById('kGroups').textContent=db.groups.length;document.getElementById('kReports').textContent=Object.keys(db.reports).length;document.getElementById('kCurrent').textContent=db.people.filter(p=>String(p.group)===String(document.getElementById('reportGroup').value)).length}
-async function addPerson(){const name=document.getElementById('pName').value.trim();if(!name)return alert('Escribe el nombre.');const group=document.getElementById('pGroup').value,status=document.getElementById('pStatus').value,note=document.getElementById('pNote').value.trim(),id=uid();if(cloudReady)try{await upsert('personas',[{id,nombre:name,grupo_id:group||null,estado:status,observacion:note}])}catch(e){return alert('No se pudo guardar en la nube: '+e.message)}db.people.push({id,name,group,status,note});document.getElementById('pName').value='';document.getElementById('pNote').value='';saveLocal();renderAll();toast('Persona agregada')}
-async function editPerson(id){const p=db.people.find(x=>x.id===id);if(!p)return;const name=prompt('Nombre completo:',p.name);if(name===null)return;p.name=name.trim()||p.name;const group=prompt('ID del grupo para asignar:\n'+db.groups.map(g=>g.id+' = '+g.name).join('\n'),p.group);if(group!==null&&db.groups.some(g=>String(g.id)===String(group)))p.group=String(group);p.status=confirm('¿La persona está activa?')?'Activo':'Inactivo';if(cloudReady)try{await updateRow('personas',id,{nombre:p.name,grupo_id:p.group,estado:p.status,observacion:p.note||''})}catch(e){return alert('No se pudo actualizar en la nube: '+e.message)}saveLocal();renderAll()}
-function openChange(id){const p=db.people.find(x=>x.id===id);if(!p)return;const current=db.groups.find(g=>String(g.id)===String(p.group)),select=document.getElementById('changeGroup');select.innerHTML=db.groups.filter(g=>String(g.id)!==String(p.group)).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');document.getElementById('changePersonName').textContent=p.name;document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';select.dataset.personId=id;document.getElementById('changeModal').classList.add('show')}
+
+function fillSelect(id,all=false){
+  const el=document.getElementById(id);if(!el)return;
+  const old=el.value;
+  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+  if(db.groups.some(g=>String(g.id)===String(old)))el.value=old;
+  else if(el.options.length)el.value=el.options[0].value;
+}
+
+function renderAll(){
+  const month=document.getElementById('month');
+  if(month){
+    month.innerHTML=months.map((m,i)=>`<option value="${i}">${m}</option>`).join('');
+    if(month.dataset.ready!=='1'){
+      month.value=new Date().getMonth();
+      const year=document.getElementById('year');
+      if(year)year.value=new Date().getFullYear();
+      month.dataset.ready='1';
+    }
+  }
+  fillSelect('pGroup');fillSelect('reportGroup');
+  renderPeople();renderGroups();renderReport();renderHistory();renderTransfers();
+  const kPeople=document.getElementById('kPeople'),kGroups=document.getElementById('kGroups'),kReports=document.getElementById('kReports'),kCurrent=document.getElementById('kCurrent');
+  if(kPeople)kPeople.textContent=db.people.length;
+  if(kGroups)kGroups.textContent=db.groups.length;
+  if(kReports)kReports.textContent=Object.keys(db.reports).length;
+  if(kCurrent)kCurrent.textContent=db.people.filter(p=>String(p.group)===String(document.getElementById('reportGroup')?.value)).length;
+}
+
+async function addPerson(){
+  const name=document.getElementById('pName').value.trim();
+  if(!name)return alert('Escribe el nombre.');
+  const group=document.getElementById('pGroup').value,status=document.getElementById('pStatus').value,note=document.getElementById('pNote').value.trim(),id=uid();
+  if(cloudReady)try{await upsert('personas',[{id,nombre:name,grupo_id:group||null,estado:status,observacion:note}])}
+  catch(e){return alert('No se pudo guardar en la nube: '+e.message)}
+  db.people.push({id,name,group,status,note});
+  document.getElementById('pName').value='';document.getElementById('pNote').value='';
+  saveLocal();renderAll();toast(cloudReady?'Persona guardada en la nube':'Persona guardada localmente');
+}
+
+async function editPerson(id){
+  const p=db.people.find(x=>x.id===id);if(!p)return;
+  const name=prompt('Nombre completo:',p.name);if(name===null)return;
+  p.name=name.trim()||p.name;
+  const group=prompt('ID del grupo para asignar:\n'+db.groups.map(g=>g.id+' = '+g.name).join('\n'),p.group);
+  if(group!==null&&db.groups.some(g=>String(g.id)===String(group)))p.group=String(group);
+  p.status=confirm('¿La persona está activa?')?'Activo':'Inactivo';
+  if(cloudReady)try{await updateRow('personas',id,{nombre:p.name,grupo_id:p.group,estado:p.status,observacion:p.note||''})}
+  catch(e){return alert('No se pudo actualizar en la nube: '+e.message)}
+  saveLocal();renderAll();
+}
+
+function openChange(id){
+  const p=db.people.find(x=>x.id===id);if(!p)return;
+  const current=db.groups.find(g=>String(g.id)===String(p.group)),select=document.getElementById('changeGroup');
+  select.innerHTML=db.groups.filter(g=>String(g.id)!==String(p.group)).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+  if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');
+  document.getElementById('changePersonName').textContent=p.name;
+  document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';
+  select.dataset.personId=id;
+  document.getElementById('changeModal').classList.add('show');
+}
 function closeChange(){document.getElementById('changeModal').classList.remove('show')}
-async function confirmChange(){const select=document.getElementById('changeGroup'),id=select.dataset.personId,p=db.people.find(x=>x.id===id);if(!p||!select.value)return;const from=db.groups.find(g=>String(g.id)===String(p.group)),to=db.groups.find(g=>String(g.id)===String(select.value));if(!to||String(from?.id)===String(to.id))return;if(cloudReady)try{await updateRow('personas',id,{grupo_id:to.id});await upsert('cambios_grupo',[{id:uid(),person_id:id,person_name:p.name,from_group_id:from?.id||null,from_group_name:from?.name||'Sin grupo',to_group_id:to.id,to_group_name:to.name,changed_at:new Date().toISOString()}])}catch(e){return alert('No se pudo registrar el cambio en la nube: '+e.message)}if(!Array.isArray(db.transfers))db.transfers=[];db.transfers.push({id:uid(),personId:p.id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt:new Date().toISOString()});p.group=String(to.id);saveLocal();closeChange();renderAll();toast(`${p.name} ahora pertenece a ${to.name}`)}
-async function removePerson(id){if(!confirm('¿Eliminar esta persona?'))return;if(cloudReady)try{await deleteRow('personas',id)}catch(e){return alert('No se pudo eliminar en la nube: '+e.message)}db.people=db.people.filter(p=>p.id!==id);saveLocal();renderAll()}
-function renderPeople(){const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase(),arr=db.people.filter(p=>p.name.toLowerCase().includes(q));document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>String(g.id)===String(p.group))?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>'}
-async function addGroup(){const name=document.getElementById('gName').value.trim();if(!name)return alert('Escribe el nombre del grupo.');const number=document.getElementById('gNumber').value?Number(document.getElementById('gNumber').value):null,description=document.getElementById('gDescription').value.trim();let id=uid();if(cloudReady)try{const rows=await upsert('grupos',[{nombre:name,numero:number,descripcion:description}]);id=String(rows[0].id)}catch(e){return alert('No se pudo crear el grupo en la nube: '+e.message)}db.groups.push({id,name,number:number??'',description});document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';saveLocal();renderAll();toast('Grupo creado')}
-async function editGroup(id){const g=db.groups.find(x=>x.id===id);const n=prompt('Nombre del grupo:',g.name);if(n&&n.trim()){g.name=n.trim();if(cloudReady)try{await updateRow('grupos',id,{nombre:g.name,numero:g.number||null,descripcion:g.description||''})}catch(e){return alert('No se pudo actualizar el grupo: '+e.message)}saveLocal();renderAll()}}
-async function removeGroup(id){if(db.people.some(p=>String(p.group)===String(id)))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');if(confirm('¿Eliminar este grupo?')){if(cloudReady)try{await deleteRow('grupos',id)}catch(e){return alert('No se pudo eliminar el grupo en la nube: '+e.message)}db.groups=db.groups.filter(g=>String(g.id)!==String(id));saveLocal();renderAll()}}
-function renderGroups(){document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>String(p.group)===String(g.id)).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>'}
+
+async function confirmChange(){
+  const select=document.getElementById('changeGroup'),id=select.dataset.personId,p=db.people.find(x=>x.id===id);
+  if(!p||!select.value)return;
+  const from=db.groups.find(x=>String(x.id)===String(p.group)),to=db.groups.find(x=>String(x.id)===String(select.value));
+  if(!to||String(from?.id)===String(to.id))return;
+  const changedAt=new Date().toISOString();
+  if(cloudReady)try{
+    await updateRow('personas',id,{grupo_id:to.id});
+    await upsert('cambios_grupo',[{id:uid(),person_id:id,person_name:p.name,from_group_id:from?.id||null,from_group_name:from?.name||'Sin grupo',to_group_id:to.id,to_group_name:to.name,changed_at:changedAt}]);
+  }catch(e){return alert('No se pudo registrar el cambio en la nube: '+e.message)}
+  if(!Array.isArray(db.transfers))db.transfers=[];
+  db.transfers.push({id:uid(),personId:p.id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt});
+  p.group=String(to.id);
+  saveLocal();closeChange();renderAll();toast(`${p.name} ahora pertenece a ${to.name}`);
+}
+
+async function removePerson(id){
+  if(!confirm('¿Eliminar esta persona?'))return;
+  if(cloudReady)try{await deleteRow('personas',id)}catch(e){return alert('No se pudo eliminar en la nube: '+e.message)}
+  db.people=db.people.filter(p=>String(p.id)!==String(id));
+  saveLocal();renderAll();
+}
+
+function renderPeople(){
+  const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();
+  const arr=db.people.filter(p=>String(p.name||'').toLowerCase().includes(q));
+  document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>String(g.id)===String(p.group))?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
+}
+
+async function addGroup(){
+  const name=document.getElementById('gName').value.trim();
+  if(!name)return alert('Escribe el nombre del grupo.');
+  const number=document.getElementById('gNumber').value?Number(document.getElementById('gNumber').value):null;
+  const description=document.getElementById('gDescription').value.trim();
+  let id=uid();
+  if(cloudReady)try{
+    const rows=await upsert('grupos',[{nombre:name,numero:number,descripcion:description}]);
+    if(!rows?.[0]?.id)throw new Error('Supabase no devolvió el ID del grupo.');
+    id=String(rows[0].id);
+  }catch(e){return alert('No se pudo crear el grupo en la nube: '+e.message)}
+  db.groups.push({id,name,number:number??'',description});
+  document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';
+  saveLocal();renderAll();toast(cloudReady?'Grupo creado y guardado en la nube':'Grupo creado localmente');
+}
+
+async function editGroup(id){
+  const g=db.groups.find(x=>String(x.id)===String(id));if(!g)return;
+  const n=prompt('Nombre del grupo:',g.name);if(n===null)return;
+  if(n.trim()){
+    g.name=n.trim();
+    if(cloudReady)try{await updateRow('grupos',id,{nombre:g.name,numero:g.number||null,descripcion:g.description||''})}
+    catch(e){return alert('No se pudo actualizar el grupo: '+e.message)}
+    saveLocal();renderAll();
+  }
+}
+
+async function removeGroup(id){
+  if(db.people.some(p=>String(p.group)===String(id)))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');
+  if(!confirm('¿Eliminar este grupo?'))return;
+  if(cloudReady)try{await deleteRow('grupos',id)}catch(e){return alert('No se pudo eliminar el grupo en la nube: '+e.message)}
+  db.groups=db.groups.filter(g=>String(g.id)!==String(id));
+  saveLocal();renderAll();
+}
+
+function renderGroups(){
+  document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>String(p.group)===String(g.id)).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>';
+}
+
 function reportKey(){return `${document.getElementById('year').value}|${document.getElementById('month').value}|${document.getElementById('reportGroup').value}`}
-function currentRows(){const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};return db.people.filter(p=>String(p.group)===String(gid)&&p.name.toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}))}
-function renderReport(){const g=db.groups.find(x=>String(x.id)===String(document.getElementById('reportGroup').value));document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];document.getElementById('rGroup').textContent=g?.number||g?.name||'';const rows=currentRows();document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>'}
-function collect(){let rows={};document.querySelectorAll('#reportTable input[data-id]').forEach(x=>{rows[x.dataset.id]??={};rows[x.dataset.id][x.dataset.f]=x.value});return rows}
-async function saveReport(){const key=reportKey(),[year,month,group_id]=key.split('|'),rows=collect();if(cloudReady)try{await upsert('informes',[{id:uid(),year:Number(year),month:Number(month),group_id, saved_at:new Date().toISOString(),rows}])}catch(e){return alert('No se pudo guardar el informe en la nube: '+e.message)}db.reports[key]={savedAt:new Date().toISOString(),rows};saveLocal();renderAll();toast('Informe guardado en la nube')}
-function renderHistory(){const entries=Object.entries(db.reports).sort((a,b)=>b[0].localeCompare(a[0]));document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>String(x.id)===String(gid));return `<tr><td>${months[+m]} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v.rows||{}).length}</td><td>${new Date(v.savedAt).toLocaleString('es-BO')}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>'}
-function renderTransfers(){const el=document.getElementById('transferTable');if(!el)return;const rows=(db.transfers||[]).slice().sort((a,b)=>b.changedAt.localeCompare(a.changedAt));el.innerHTML=rows.length?`<table><thead><tr><th>Fecha</th><th>Persona</th><th>Grupo anterior</th><th>Nuevo grupo</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${new Date(t.changedAt).toLocaleString('es-BO')}</td><td>${esc(t.personName)}</td><td>${esc(t.fromGroupName)}</td><td>${esc(t.toGroupName)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay cambios de grupo registrados.</div>'}
+function currentRows(){
+  const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};
+  return db.people.filter(p=>String(p.group)===String(gid)&&String(p.name||'').toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}));
+}
+function renderReport(){
+  const g=db.groups.find(x=>String(x.id)===String(document.getElementById('reportGroup').value));
+  document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];
+  document.getElementById('rGroup').textContent=g?.number||g?.name||'';
+  const rows=currentRows();
+  document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>';
+}
+function collect(){const rows={};document.querySelectorAll('#reportTable input[data-id]').forEach(x=>{rows[x.dataset.id]??={};rows[x.dataset.id][x.dataset.f]=x.value});return rows}
+
+async function saveReport(){
+  const key=reportKey(),[year,month,group_id]=key.split('|'),rows=collect(),savedAt=new Date().toISOString();
+  if(cloudReady)try{await upsert('informes',[{id:uid(),year:Number(year),month:Number(month),group_id,saved_at:savedAt,rows}])}
+  catch(e){return alert('No se pudo guardar el informe en la nube: '+e.message)}
+  db.reports[key]={savedAt,rows};
+  saveLocal();renderAll();toast(cloudReady?'Informe guardado en la nube':'Informe guardado localmente');
+}
+
+function renderHistory(){
+  const entries=Object.entries(db.reports).sort((a,b)=>b[0].localeCompare(a[0]));
+  document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>String(x.id)===String(gid));return `<tr><td>${months[+m]||''} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v?.rows||{}).length}</td><td>${v?.savedAt?new Date(v.savedAt).toLocaleString('es-BO'):''}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>';
+}
+
+function renderTransfers(){
+  const el=document.getElementById('transferTable');if(!el)return;
+  const rows=(Array.isArray(db.transfers)?db.transfers:[]).slice().sort((a,b)=>String(b?.changedAt||'').localeCompare(String(a?.changedAt||'')));
+  el.innerHTML=rows.length?`<table><thead><tr><th>Fecha</th><th>Persona</th><th>Grupo anterior</th><th>Nuevo grupo</th></tr></thead><tbody>${rows.map(t=>{
+    const date=t?.changedAt?new Date(t.changedAt):null;
+    const dateText=date&&!Number.isNaN(date.getTime())?date.toLocaleString('es-BO'):'';
+    return `<tr><td>${dateText}</td><td>${esc(t?.personName||'')}</td><td>${esc(t?.fromGroupName||'Sin grupo')}</td><td>${esc(t?.toGroupName||'')}</td></tr>`;
+  }).join('')}</tbody></table>`:'<div class="empty">No hay cambios de grupo registrados.</div>';
+}
+
 function openReport(k){let [y,m,g]=k.split('|');document.getElementById('year').value=y;document.getElementById('month').value=m;document.getElementById('reportGroup').value=g;go('informe')}
-async function deleteReport(k){if(!confirm('¿Eliminar este informe del historial?'))return;const [year,month,group_id]=k.split('|');if(cloudReady)try{await api(`informes?year=eq.${encodeURIComponent(year)}&month=eq.${encodeURIComponent(month)}&group_id=eq.${encodeURIComponent(group_id)}`,{method:'DELETE',headers:headers({'Prefer':'return=minimal'})})}catch(e){return alert('No se pudo eliminar el informe: '+e.message)}delete db.reports[k];saveLocal();renderAll()}
-function exportCSV(){const rows=currentRows(),lines=[['N°','NOMBRE','PREDICÓ','ESTUDIOS','HORAS','OBSERVACIONES'],...rows.map((r,i)=>[i+1,r.name,r.predico,r.estudios,r.horas,r.obs])],csv='\ufeff'+lines.map(a=>a.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n'),blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`informe_${months[+document.getElementById('month').value]}_${document.getElementById('year').value}.csv`;a.click();URL.revokeObjectURL(a.href)}
-function backup(){const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_administrador_grupos.json';a.click();URL.revokeObjectURL(a.href);toast('Copia de seguridad creada')}
-async function restore(file){if(!file)return;const r=new FileReader();r.onload=async()=>{try{const x=JSON.parse(r.result);if(!x.groups||!x.people||!x.reports)throw 0;if(cloudReady){for(const g of x.groups){const existing=db.groups.find(a=>a.name.toLowerCase()===String(g.name).toLowerCase());if(!existing)await upsert('grupos',[{id:uid(),nombre:g.name,numero:g.number||null,descripcion:g.description||''}])}return alert('El respaldo se puede conservar localmente; para restaurarlo en la nube usaremos una migración controlada.')}db=x;saveLocal();renderAll();toast('Datos restaurados')}catch(e){alert('El archivo no es un respaldo válido.')}};r.readAsText(file)}
+
+async function deleteReport(k){
+  if(!confirm('¿Eliminar este informe del historial?'))return;
+  const [year,month,group_id]=k.split('|');
+  if(cloudReady)try{await api(`informes?year=eq.${encodeURIComponent(year)}&month=eq.${encodeURIComponent(month)}&group_id=eq.${encodeURIComponent(group_id)}`,{method:'DELETE',headers:headers({'Prefer':'return=minimal'})})}
+  catch(e){return alert('No se pudo eliminar el informe: '+e.message)}
+  delete db.reports[k];saveLocal();renderAll();
+}
+
+function exportCSV(){
+  const rows=currentRows(),lines=[['N°','NOMBRE','PREDICÓ','ESTUDIOS','HORAS','OBSERVACIONES'],...rows.map((r,i)=>[i+1,r.name,r.predico,r.estudios,r.horas,r.obs])];
+  const csv='\ufeff'+lines.map(a=>a.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=`informe_${months[+document.getElementById('month').value]}_${document.getElementById('year').value}.csv`;a.click();URL.revokeObjectURL(a.href);
+}
+
+function backup(){
+  const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download='respaldo_administrador_grupos.json';a.click();URL.revokeObjectURL(a.href);toast('Copia de seguridad creada');
+}
+
+async function restore(file){
+  if(!file)return;
+  const r=new FileReader();
+  r.onload=async()=>{
+    try{
+      const x=JSON.parse(r.result);
+      if(!x.groups||!x.people||!x.reports)throw new Error('estructura inválida');
+      x.transfers=Array.isArray(x.transfers)?x.transfers:[];
+      db=x;saveLocal();renderAll();
+      if(cloudReady){
+        const cloud=cloudToDB(await api('grupos?select=*'),await api('personas?select=*'),await api('informes?select=*'),await api('cambios_grupo?select=*'));
+        await syncLocalToCloud(db,cloud);
+        toast('Datos restaurados y sincronizados');
+        await initCloud();
+      }else toast('Datos restaurados localmente');
+    }catch(e){console.error(e);alert('El archivo no es un respaldo válido o no pudo sincronizarse: '+e.message)}
+  };
+  r.readAsText(file);
+}
+
 renderAll();
-if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+if('serviceWorker' in navigator && location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(e=>console.warn('Service Worker:',e));
 initCloud();
 </script>
 </body></html>
