@@ -30,7 +30,7 @@ table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid
 <body>
 <header>
 <div><h1>Administrador de Grupos</h1><small>Personas · grupos · informes mensuales</small></div>
-<div id="saveStatus">✓ Guardado local</div>
+<div id="saveStatus">☁ Conectando...</div>
 </header>
 <div class="container">
 <div class="nav no-print">
@@ -110,10 +110,15 @@ table{border-collapse:collapse;width:100%;background:#fff}th,td{border:1px solid
 </div>
 <div id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const KEY='admin_grupos_final_v2';
+const SUPABASE_URL='https://eoyyluquwqfgyhhknvbk.supabase.co';
+const SUPABASE_KEY='sb_publishable_ZoqCP53tUwCTCGpYavWl5Q_JNcPJ_T9';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const LOCAL_KEY='admin_grupos_final_v2';
 const months=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
-let db=load();
+let db={groups:[],people:[],reports:{},transfers:[]};
+let cloudReady=false;
 
 function uid(){return (crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+Math.random())}
 function initialDB(){
@@ -121,14 +126,14 @@ function initialDB(){
  const gid='g8';
  return {groups:[{id:gid,name:'Grupo 8',number:8,description:''}],people:names.map(name=>({id:uid(),name,group:gid,status:'Activo',note:''})),reports:{},transfers:[]};
 }
-function load(){try{let x=JSON.parse(localStorage.getItem(KEY));if(!x)return initialDB();x.transfers=Array.isArray(x.transfers)?x.transfers:[];return x}catch(e){return initialDB()}}
-function save(){localStorage.setItem(KEY,JSON.stringify(db));document.getElementById('saveStatus').textContent='✓ Guardado';setTimeout(()=>document.getElementById('saveStatus').textContent='✓ Guardado local',700)}
+function loadLocal(){try{let x=JSON.parse(localStorage.getItem(LOCAL_KEY));if(!x)return initialDB();x.transfers=Array.isArray(x.transfers)?x.transfers:[];return x}catch(e){return initialDB()}}
+function cacheLocal(){localStorage.setItem(LOCAL_KEY,JSON.stringify(db))}
+function setStatus(text){const el=document.getElementById('saveStatus');if(el)el.textContent=text}
 function toast(s){let t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',1800)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function go(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(page).classList.add('active');renderAll()}
 function fillSelect(id,all=false){
- const el=document.getElementById(id);if(!el)return;
- const old=el.value;
+ const el=document.getElementById(id);if(!el)return; const old=el.value;
  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
  if(db.groups.some(g=>g.id===old))el.value=old; else if(el.options.length)el.value=el.options[0].value;
 }
@@ -139,99 +144,75 @@ function renderAll(){
  document.getElementById('kPeople').textContent=db.people.length;document.getElementById('kGroups').textContent=db.groups.length;document.getElementById('kReports').textContent=Object.keys(db.reports).length;
  document.getElementById('kCurrent').textContent=db.people.filter(p=>p.group===document.getElementById('reportGroup').value).length;
 }
-function addPerson(){
- const name=document.getElementById('pName').value.trim();if(!name)return alert('Escribe el nombre.');
- db.people.push({id:uid(),name,group:document.getElementById('pGroup').value,status:document.getElementById('pStatus').value,note:document.getElementById('pNote').value.trim()});
- document.getElementById('pName').value='';document.getElementById('pNote').value='';save();renderAll();toast('Persona agregada');
+
+async function cloudLoad(){
+ setStatus('☁ Conectando...');
+ const [gRes,pRes,iRes,tRes]=await Promise.all([sb.from('grupos').select('*').order('id'),sb.from('personas').select('*').order('id'),sb.from('informes_mensuales').select('*').order('id'),sb.from('cambios_grupo').select('*').order('fecha')]);
+ for(const r of [gRes,pRes,iRes,tRes]) if(r.error) throw r.error;
+ let groups=gRes.data||[], people=pRes.data||[], reportsRows=iRes.data||[], transfers=tRes.data||[];
+ const local=loadLocal();
+ if(people.length===0 && local.people.length){
+   const groupMap=new Map();
+   for(const lg of local.groups){
+     let g=groups.find(x=>(x.nombre||'').toLowerCase()===(lg.name||'').toLowerCase() || String(x.numero||'')===String(lg.number||''));
+     if(!g){const ins=await sb.from('grupos').insert({nombre:lg.name,numero:lg.number?String(lg.number):null,descripcion:lg.description||''}).select().single();if(ins.error)throw ins.error;g=ins.data;groups.push(g)}
+     groupMap.set(lg.id,g.id);
+   }
+   const personPayload=local.people.map(p=>({nombre:p.name,grupo_id:groupMap.get(p.group)||null,estado:p.status||'Activo',observacion:p.note||''}));
+   const insP=await sb.from('personas').insert(personPayload).select();if(insP.error)throw insP.error;
+   const oldToNew=new Map(); local.people.forEach((p,i)=>oldToNew.set(p.id,insP.data[i].id));
+   const reportPayload=[];
+   for(const [key,v] of Object.entries(local.reports||{})){const [y,m,gid]=key.split('|');for(const [oldPid,row] of Object.entries(v.rows||{})){const np=oldToNew.get(oldPid);if(np)reportPayload.push({persona_id:np,anio:Number(y),mes:Number(m)+1,predico:String(row.predico||'').toLowerCase()=='true',estudios:Number(row.estudios)||0,horas:Number(row.horas)||0,observaciones:row.obs||''})}}
+   if(reportPayload.length){const ir=await sb.from('informes_mensuales').upsert(reportPayload,{onConflict:'persona_id,anio,mes'});if(ir.error)throw ir.error}
+   const transferPayload=(local.transfers||[]).map(t=>({persona_id:oldToNew.get(t.personId)||null,persona_nombre:t.personName||'',grupo_anterior_id:groupMap.get(t.fromGroupId)||null,grupo_anterior_nombre:t.fromGroupName||'',grupo_nuevo_id:groupMap.get(t.toGroupId)||null,grupo_nuevo_nombre:t.toGroupName||'',fecha:t.changedAt||new Date().toISOString()}));
+   if(transferPayload.length){const tr=await sb.from('cambios_grupo').insert(transferPayload);if(tr.error)throw tr.error}
+   const fresh=await Promise.all([sb.from('grupos').select('*').order('id'),sb.from('personas').select('*').order('id'),sb.from('informes_mensuales').select('*').order('id'),sb.from('cambios_grupo').select('*').order('fecha')]);
+   groups=fresh[0].data||[];people=fresh[1].data||[];reportsRows=fresh[2].data||[];transfers=fresh[3].data||[];
+ }
+ db={groups:groups.map(g=>({id:String(g.id),name:g.nombre,number:g.numero?Number(g.numero):'',description:g.descripcion||''})),people:people.map(p=>({id:String(p.id),name:p.nombre,group:p.grupo_id==null?'':String(p.grupo_id),status:p.estado||'Activo',note:p.observacion||''})),reports:{},transfers:transfers.map(t=>({id:String(t.id),personId:t.persona_id==null?'':String(t.persona_id),personName:t.persona_nombre,fromGroupId:t.grupo_anterior_id==null?'':String(t.grupo_anterior_id),fromGroupName:t.grupo_anterior_nombre||'Sin grupo',toGroupId:t.grupo_nuevo_id==null?'':String(t.grupo_nuevo_id),toGroupName:t.grupo_nuevo_nombre||'',changedAt:t.fecha}))};
+ for(const r of reportsRows){const k=`${r.anio}|${Number(r.mes)-1}|${r.persona_id}`; /* marker */ if(!db.reports[r.anio+'|'+(Number(r.mes)-1)+'|'+(r.persona_id)] ){} }
+ for(const r of reportsRows){const keyBase=`${r.anio}|${Number(r.mes)-1}`; let gid=db.people.find(p=>p.id===String(r.persona_id))?.group||''; const key=`${keyBase}|${gid}`; db.reports[key]??={savedAt:r.updated_at||r.created_at||new Date().toISOString(),rows:{}}; db.reports[key].savedAt=r.updated_at||r.created_at||db.reports[key].savedAt; db.reports[key].rows[String(r.persona_id)]={predico:r.predico?'true':'',estudios:r.estudios??'',horas:r.horas??'',obs:r.observaciones||''};}
+ cacheLocal(); cloudReady=true; setStatus('☁ Sincronizado'); renderAll();
 }
-function editPerson(id){
- const p=db.people.find(x=>x.id===id);if(!p)return;
- const name=prompt('Nombre completo:',p.name);if(name===null)return;
- p.name=name.trim()||p.name;
- const group=prompt('ID del grupo para asignar:\n'+db.groups.map(g=>g.id+' = '+g.name).join('\n'),p.group);
- if(group!==null&&db.groups.some(g=>g.id===group))p.group=group;
- const status=confirm('¿La persona está activa?');p.status=status?'Activo':'Inactivo';
- save();renderAll();
-}
-function openChange(id){
- const p=db.people.find(x=>x.id===id);if(!p)return;
- const current=db.groups.find(g=>g.id===p.group);
- const select=document.getElementById('changeGroup');
- select.innerHTML=db.groups.filter(g=>g.id!==p.group).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
- if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');
- document.getElementById('changePersonName').textContent=p.name;
- document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';
- select.dataset.personId=id;
- document.getElementById('changeModal').classList.add('show');
-}
+async function safeCloud(fn){try{await fn();cacheLocal();setStatus('☁ Guardado');setTimeout(()=>setStatus('☁ Sincronizado'),900)}catch(e){console.error(e);setStatus('⚠ Error de nube');alert('No se pudo guardar en la nube: '+(e.message||e))}}
+
+async function addPerson(){const name=document.getElementById('pName').value.trim();if(!name)return alert('Escribe el nombre.');const group=document.getElementById('pGroup').value;const status=document.getElementById('pStatus').value;const note=document.getElementById('pNote').value.trim();if(!cloudReady)return;await safeCloud(async()=>{const r=await sb.from('personas').insert({nombre:name,grupo_id:group||null,estado:status,observacion:note}).select().single();if(r.error)throw r.error;db.people.push({id:String(r.data.id),name:r.data.nombre,group:r.data.grupo_id==null?'':String(r.data.grupo_id),status:r.data.estado,note:r.data.observacion||''});document.getElementById('pName').value='';document.getElementById('pNote').value='';renderAll();toast('Persona agregada')})}
+async function editPerson(id){const p=db.people.find(x=>x.id===id);if(!p)return;const name=prompt('Nombre completo:',p.name);if(name===null)return;const status=confirm('¿La persona está activa?')?'Activo':'Inactivo';await safeCloud(async()=>{const r=await sb.from('personas').update({nombre:name.trim()||p.name,estado:status}).eq('id',id);if(r.error)throw r.error;p.name=name.trim()||p.name;p.status=status;renderAll()})}
+function openChange(id){const p=db.people.find(x=>x.id===id);if(!p)return;const current=db.groups.find(g=>g.id===p.group);const select=document.getElementById('changeGroup');select.innerHTML=db.groups.filter(g=>g.id!==p.group).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');document.getElementById('changePersonName').textContent=p.name;document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';select.dataset.personId=id;document.getElementById('changeModal').classList.add('show')}
 function closeChange(){document.getElementById('changeModal').classList.remove('show')}
-function confirmChange(){
- const select=document.getElementById('changeGroup'),id=select.dataset.personId,p=db.people.find(x=>x.id===id);
- if(!p||!select.value)return;
- const from=db.groups.find(g=>g.id===p.group),to=db.groups.find(g=>g.id===select.value);
- if(!to)return;
- if(from?.id===to.id)return;
- if(!Array.isArray(db.transfers))db.transfers=[];
- db.transfers.push({id:uid(),personId:p.id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt:new Date().toISOString()});
- p.group=to.id;
- save();closeChange();renderAll();toast(`${p.name} ahora pertenece a ${to.name}`);
-}
-function removePerson(id){if(confirm('¿Eliminar esta persona?')){db.people=db.people.filter(p=>p.id!==id);save();renderAll()}}
-function renderPeople(){
- const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();
- const arr=db.people.filter(p=>p.name.toLowerCase().includes(q));
- document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>g.id===p.group)?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
-}
-function addGroup(){
- const name=document.getElementById('gName').value.trim();if(!name)return alert('Escribe el nombre del grupo.');
- db.groups.push({id:uid(),name,number:document.getElementById('gNumber').value?Number(document.getElementById('gNumber').value):'',description:document.getElementById('gDescription').value.trim()});
- document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';save();renderAll();toast('Grupo creado');
-}
-function editGroup(id){const g=db.groups.find(x=>x.id===id);const n=prompt('Nombre del grupo:',g.name);if(n&&n.trim()){g.name=n.trim();save();renderAll()}}
-function removeGroup(id){
- if(db.people.some(p=>p.group===id))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');
- if(confirm('¿Eliminar este grupo?')){db.groups=db.groups.filter(g=>g.id!==id);save();renderAll()}
-}
-function renderGroups(){
- document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>p.group===g.id).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>';
-}
+async function confirmChange(){const select=document.getElementById('changeGroup'),id=select.dataset.personId,p=db.people.find(x=>x.id===id);if(!p||!select.value)return;const from=db.groups.find(g=>g.id===p.group),to=db.groups.find(g=>g.id===select.value);if(!to||from?.id===to.id)return;await safeCloud(async()=>{const r=await sb.from('personas').update({grupo_id:to.id}).eq('id',id);if(r.error)throw r.error;const tr=await sb.from('cambios_grupo').insert({persona_id:Number(id),persona_nombre:p.name,grupo_anterior_id:from?Number(from.id):null,grupo_anterior_nombre:from?.name||'Sin grupo',grupo_nuevo_id:Number(to.id),grupo_nuevo_nombre:to.name}).select().single();if(tr.error)throw tr.error;db.transfers.push({id:String(tr.data.id),personId:id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt:tr.data.fecha});p.group=to.id;closeChange();renderAll();toast(`${p.name} ahora pertenece a ${to.name}`)})}
+async function removePerson(id){if(!confirm('¿Eliminar esta persona?'))return;await safeCloud(async()=>{const r=await sb.from('personas').delete().eq('id',id);if(r.error)throw r.error;db.people=db.people.filter(p=>p.id!==id);renderAll()})}
+function renderPeople(){const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();const arr=db.people.filter(p=>p.name.toLowerCase().includes(q));document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>g.id===p.group)?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>'}
+async function addGroup(){const name=document.getElementById('gName').value.trim();if(!name)return alert('Escribe el nombre del grupo.');const number=document.getElementById('gNumber').value?Number(document.getElementById('gNumber').value):null;const description=document.getElementById('gDescription').value.trim();await safeCloud(async()=>{const r=await sb.from('grupos').insert({nombre:name,numero:number?String(number):null,descripcion:description}).select().single();if(r.error)throw r.error;db.groups.push({id:String(r.data.id),name:r.data.nombre,number:r.data.numero?Number(r.data.numero):'',description:r.data.descripcion||''});document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';renderAll();toast('Grupo creado')})}
+async function editGroup(id){const g=db.groups.find(x=>x.id===id);if(!g)return;const n=prompt('Nombre del grupo:',g.name);if(!n||!n.trim())return;await safeCloud(async()=>{const r=await sb.from('grupos').update({nombre:n.trim()}).eq('id',id);if(r.error)throw r.error;g.name=n.trim();renderAll()})}
+async function removeGroup(id){if(db.people.some(p=>p.group===id))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');if(!confirm('¿Eliminar este grupo?'))return;await safeCloud(async()=>{const r=await sb.from('grupos').delete().eq('id',id);if(r.error)throw r.error;db.groups=db.groups.filter(g=>g.id!==id);renderAll()})}
+function renderGroups(){document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>p.group===g.id).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>'}
 function reportKey(){return `${document.getElementById('year').value}|${document.getElementById('month').value}|${document.getElementById('reportGroup').value}`}
-function currentRows(){
- const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};
- return db.people.filter(p=>p.group===gid&&p.name.toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}));
-}
-function renderReport(){
- const g=db.groups.find(x=>x.id===document.getElementById('reportGroup').value);
- document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];
- document.getElementById('rGroup').textContent=g?.number||g?.name||'';
- const rows=currentRows();
- document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>';
-}
+function currentRows(){const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};return db.people.filter(p=>p.group===gid&&p.name.toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}))}
+function renderReport(){const g=db.groups.find(x=>x.id===document.getElementById('reportGroup').value);document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];document.getElementById('rGroup').textContent=g?.number||g?.name||'';const rows=currentRows();document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>'}
 function collect(){let rows={};document.querySelectorAll('#reportTable input[data-id]').forEach(x=>{rows[x.dataset.id]??={};rows[x.dataset.id][x.dataset.f]=x.value});return rows}
-function saveReport(){db.reports[reportKey()]={savedAt:new Date().toISOString(),rows:collect()};save();renderAll();toast('Informe guardado')}
+async function saveReport(){if(!cloudReady)return;const key=reportKey(),rows=collect();const gid=document.getElementById('reportGroup').value;await safeCloud(async()=>{const payload=[];for(const [pid,row] of Object.entries(rows)){payload.push({persona_id:Number(pid),anio:Number(document.getElementById('year').value),mes:Number(document.getElementById('month').value)+1,predico:String(row.predico||'').toLowerCase()=='true',estudios:Number(row.estudios)||0,horas:Number(row.horas)||0,observaciones:row.obs||''})}if(payload.length){const r=await sb.from('informes_mensuales').upsert(payload,{onConflict:'persona_id,anio,mes'});if(r.error)throw r.error}db.reports[key]={savedAt:new Date().toISOString(),rows};renderAll();toast('Informe guardado en la nube')})}
 function renderHistory(){
  const entries=Object.entries(db.reports).sort((a,b)=>b[0].localeCompare(a[0]));
- document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>x.id===gid);return `<tr><td>${months[+m]} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v.rows||{}).length}</td><td>${new Date(v.savedAt).toLocaleString('es-BO')}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>';
-}
-function renderTransfers(){
- const el=document.getElementById('transferTable');if(!el)return;
- const rows=(db.transfers||[]).slice().sort((a,b)=>b.changedAt.localeCompare(a.changedAt));
- el.innerHTML=rows.length?`<table><thead><tr><th>Fecha</th><th>Persona</th><th>Grupo anterior</th><th>Nuevo grupo</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${new Date(t.changedAt).toLocaleString('es-BO')}</td><td>${esc(t.personName)}</td><td>${esc(t.fromGroupName)}</td><td>${esc(t.toGroupName)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay cambios de grupo registrados.</div>';
+ document.getElementById('historyTable').innerHTML=entries.length?`<table><thead><tr><th>Mes</th><th>Grupo</th><th>Personas</th><th>Guardado</th><th>Acciones</th></tr></thead><tbody>${entries.map(([k,v])=>{let [y,m,gid]=k.split('|'),g=db.groups.find(x=>x.id===gid);return `<tr><td>${months[+m]} ${y}</td><td>${esc(g?.name||'Grupo eliminado')}</td><td class="center">${Object.keys(v.rows||{}).length}</td><td>${new Date(v.savedAt).toLocaleString('es-BO')}</td><td class="actions"><button onclick="openReport('${k}')">Abrir</button><button class="danger" onclick="deleteReport('${k}')">Eliminar</button></td></tr>`}).join('')}</tbody></table>`:'<div class="empty">No hay informes guardados.</div>'
 }
 function openReport(k){let [y,m,g]=k.split('|');document.getElementById('year').value=y;document.getElementById('month').value=m;document.getElementById('reportGroup').value=g;go('informe')}
-function deleteReport(k){if(confirm('¿Eliminar este informe del historial?')){delete db.reports[k];save();renderAll()}}
-function exportCSV(){
- const rows=currentRows(),lines=[['N°','NOMBRE','PREDICÓ','ESTUDIOS','HORAS','OBSERVACIONES'],...rows.map((r,i)=>[i+1,r.name,r.predico,r.estudios,r.horas,r.obs])];
- const csv='\ufeff'+lines.map(a=>a.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');
- const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`informe_${months[+document.getElementById('month').value]}_${document.getElementById('year').value}.csv`;a.click();URL.revokeObjectURL(a.href);
+async function deleteReport(k){
+ if(!confirm('¿Eliminar este informe del historial?'))return;
+ const [y,m,gid]=k.split('|');
+ const personIds=db.people.filter(p=>p.group===gid).map(p=>Number(p.id));
+ await safeCloud(async()=>{
+   if(personIds.length){const r=await sb.from('informes_mensuales').delete().eq('anio',Number(y)).eq('mes',Number(m)+1).in('persona_id',personIds);if(r.error)throw r.error}
+   delete db.reports[k]; renderAll(); toast('Informe eliminado');
+ })
 }
-function backup(){
- const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_administrador_grupos.json';a.click();URL.revokeObjectURL(a.href);toast('Copia de seguridad creada');
-}
-function restore(file){
- if(!file)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.groups||!x.people||!x.reports)throw 0;db=x;save();renderAll();toast('Datos restaurados')}catch(e){alert('El archivo no es un respaldo válido.')}};r.readAsText(file)
-}
+function renderTransfers(){const el=document.getElementById('transferTable');if(!el)return;const rows=(db.transfers||[]).slice().sort((a,b)=>b.changedAt.localeCompare(a.changedAt));el.innerHTML=rows.length?`<table><thead><tr><th>Fecha</th><th>Persona</th><th>Grupo anterior</th><th>Nuevo grupo</th></tr></thead><tbody>${rows.map(t=>`<tr><td>${new Date(t.changedAt).toLocaleString('es-BO')}</td><td>${esc(t.personName)}</td><td>${esc(t.fromGroupName)}</td><td>${esc(t.toGroupName)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay cambios de grupo registrados.</div>'}
+function exportCSV(){const rows=currentRows(),lines=[['N°','NOMBRE','PREDICÓ','ESTUDIOS','HORAS','OBSERVACIONES'],...rows.map((r,i)=>[i+1,r.name,r.predico,r.estudios,r.horas,r.obs])];const csv='\ufeff'+lines.map(a=>a.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(';')).join('\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`informe_${months[+document.getElementById('month').value]}_${document.getElementById('year').value}.csv`;a.click();URL.revokeObjectURL(a.href)}
+function backup(){const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='respaldo_administrador_grupos.json';a.click();URL.revokeObjectURL(a.href);toast('Copia de seguridad creada')}
+function restore(file){if(!file)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.groups||!x.people||!x.reports)throw 0;db=x;cacheLocal();toast('Respaldo cargado localmente. Usa Guardar informe para sincronizar sus datos.')}catch(e){alert('El archivo no es un respaldo válido.')}};r.readAsText(file)}
+
 renderAll();
+cloudLoad().catch(e=>{console.error(e);const local=loadLocal();db=local;renderAll();setStatus('⚠ Modo local');toast('No se pudo conectar a Supabase; se está usando la copia local.')});
 if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body></html>
