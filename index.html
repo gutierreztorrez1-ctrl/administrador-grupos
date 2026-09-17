@@ -214,7 +214,7 @@ async function syncLocalToCloud(local,cloud){
   const missing=local.people.filter(p=>p.name.trim()&&!existingNames.has(p.name.trim().toLowerCase()));
   if(missing.length){
     const rows=missing.map(p=>({
-      id:uid(),nombre:p.name,grupo_id:groupMap[String(p.group)]||String(p.group)||null,
+      nombre:p.name,grupo_id:groupMap[String(p.group)]||String(p.group)||null,
       estado:p.status||'Activo',observacion:p.note||''
     }));
     const inserted=await upsert('personas',rows);
@@ -263,7 +263,7 @@ async function initCloud(){
 
     if(cloud.people.length===0){
       const g8=cloud.groups.find(g=>g.name==='Grupo 8')||cloud.groups[0];
-      const rows=initialDB().people.map(p=>({id:uid(),nombre:p.name,grupo_id:g8?.id||null,estado:'Activo',observacion:''}));
+      const rows=initialDB().people.map(p=>({nombre:p.name,grupo_id:g8?.id||null,estado:'Activo',observacion:''}));
       const inserted=await upsert('personas',rows);
       cloud.people=(inserted||[]).map(x=>({id:String(x.id),name:String(x.nombre??''),group:String(x.grupo_id??''),status:String(x.estado??'Activo'),note:String(x.observacion??'')}));
     }
@@ -314,9 +314,13 @@ function renderAll(){
 async function addPerson(){
   const name=document.getElementById('pName').value.trim();
   if(!name)return alert('Escribe el nombre.');
-  const group=document.getElementById('pGroup').value,status=document.getElementById('pStatus').value,note=document.getElementById('pNote').value.trim(),id=uid();
-  if(cloudReady)try{await upsert('personas',[{id,nombre:name,grupo_id:group||null,estado:status,observacion:note}])}
-  catch(e){return alert('No se pudo guardar en la nube: '+e.message)}
+  const group=document.getElementById('pGroup').value,status=document.getElementById('pStatus').value,note=document.getElementById('pNote').value.trim();
+  let id=uid();
+  if(cloudReady)try{
+    const inserted=await upsert('personas',[{nombre:name,grupo_id:group||null,estado:status,observacion:note}]);
+    if(!inserted?.[0]?.id)throw new Error('Supabase no devolvió el ID de la persona.');
+    id=String(inserted[0].id);
+  }catch(e){return alert('No se pudo guardar en la nube: '+e.message)}
   db.people.push({id,name,group,status,note});
   document.getElementById('pName').value='';document.getElementById('pNote').value='';
   saveLocal();renderAll();toast(cloudReady?'Persona guardada en la nube':'Persona guardada localmente');
@@ -354,7 +358,7 @@ async function confirmChange(){
   const changedAt=new Date().toISOString();
   if(cloudReady)try{
     await updateRow('personas',id,{grupo_id:to.id});
-    await upsert('cambios_grupo',[{id:uid(),person_id:id,person_name:p.name,from_group_id:from?.id||null,from_group_name:from?.name||'Sin grupo',to_group_id:to.id,to_group_name:to.name,changed_at:changedAt}]);
+    await upsert('cambios_grupo',[{person_id:id,person_name:p.name,from_group_id:from?.id||null,from_group_name:from?.name||'Sin grupo',to_group_id:to.id,to_group_name:to.name,changed_at:changedAt}]);
   }catch(e){return alert('No se pudo registrar el cambio en la nube: '+e.message)}
   if(!Array.isArray(db.transfers))db.transfers=[];
   db.transfers.push({id:uid(),personId:p.id,personName:p.name,fromGroupId:from?.id||'',fromGroupName:from?.name||'Sin grupo',toGroupId:to.id,toGroupName:to.name,changedAt});
@@ -430,7 +434,7 @@ function collect(){const rows={};document.querySelectorAll('#reportTable input[d
 
 async function saveReport(){
   const key=reportKey(),[year,month,group_id]=key.split('|'),rows=collect(),savedAt=new Date().toISOString();
-  if(cloudReady)try{await upsert('informes',[{id:uid(),year:Number(year),month:Number(month),group_id,saved_at:savedAt,rows}])}
+  if(cloudReady)try{await upsert('informes',[{year:Number(year),month:Number(month),group_id,saved_at:savedAt,rows}])}
   catch(e){return alert('No se pudo guardar el informe en la nube: '+e.message)}
   db.reports[key]={savedAt,rows};
   saveLocal();renderAll();toast(cloudReady?'Informe guardado en la nube':'Informe guardado localmente');
