@@ -134,8 +134,8 @@ function loadLocal(){
     x.people=Array.isArray(x.people)?x.people:[];
     x.reports=x.reports&&typeof x.reports==='object'?x.reports:{};
     x.transfers=Array.isArray(x.transfers)?x.transfers:[];
-    x.groups.forEach(g=>{g.id=String(g.id);g.name=String(g.name??'');g.number=g.number??'';g.description=String(g.description??'')});
-    x.people.forEach(p=>{p.id=String(p.id);p.name=String(p.name??'');p.group=String(p.group??'');p.status=String(p.status??'Activo');p.note=String(p.note??'')});
+    x.groups.forEach(g=>{g.id=String(g.id);g.name=String(g.name??'');g.number=g.number??'';g.description=String(g.description??'');g.localOnly=Boolean(g.localOnly)});
+    x.people.forEach(p=>{p.id=String(p.id);p.name=String(p.name??'');p.group=String(p.group??'');p.status=String(p.status??'Activo');p.note=String(p.note??'');p.localOnly=Boolean(p.localOnly)});
     x.transfers=x.transfers.map(t=>({
       id:String(t.id??uid()),personId:String(t.personId??t.person_id??''),
       personName:String(t.personName??t.person_name??''),
@@ -143,7 +143,8 @@ function loadLocal(){
       fromGroupName:String(t.fromGroupName??t.from_group_name??'Sin grupo'),
       toGroupId:String(t.toGroupId??t.to_group_id??''),
       toGroupName:String(t.toGroupName??t.to_group_name??''),
-      changedAt:String(t.changedAt??t.changed_at??'')
+      changedAt:String(t.changedAt??t.changed_at??''),
+      localOnly:Boolean(t.localOnly)
     }));
     return x;
   }catch(e){console.error('Error leyendo datos locales:',e);return null}
@@ -192,48 +193,37 @@ function cloudToDB(g,p,r,t){
   return {groups,people,reports,transfers};
 }
 
-/* Sincroniza lo que exista localmente y falte en la nube.
-   También conserva los grupos creados mientras la nube estaba desconectada. */
+/* Sincronización segura: Supabase es la fuente de verdad cuando hay conexión.
+   Solo se suben registros marcados explícitamente como localOnly (creados sin conexión).
+   Esto evita que un registro eliminado en la nube reaparezca por culpa de una copia local vieja. */
 async function syncLocalToCloud(local,cloud){
   if(!local)return cloud;
   const groupMap={};
 
-  for(const lg of local.groups){
+  for(const lg of local.groups.filter(g=>g.localOnly)){
     let cg=cloud.groups.find(g=>g.name.trim().toLowerCase()===String(lg.name).trim().toLowerCase());
     if(!cg){
       const rows=await upsert('grupos',[{nombre:String(lg.name||'Grupo'),numero:lg.number||null,descripcion:lg.description||''}]);
-      if(rows&&rows[0]){
+      if(rows?.[0]?.id){
         cg={id:String(rows[0].id),name:String(rows[0].nombre??lg.name),number:rows[0].numero??lg.number??'',description:String(rows[0].descripcion??lg.description??'')};
         cloud.groups.push(cg);
       }
     }
-    if(cg)groupMap[String(lg.id)]=String(cg.id);
+    if(cg){groupMap[String(lg.id)]=String(cg.id);lg.id=String(cg.id);lg.localOnly=false;}
   }
 
   const existingNames=new Set(cloud.people.map(p=>p.name.trim().toLowerCase()).filter(Boolean));
-  const missing=local.people.filter(p=>p.name.trim()&&!existingNames.has(p.name.trim().toLowerCase()));
-  if(missing.length){
-    const rows=missing.map(p=>({
-      nombre:p.name,grupo_id:groupMap[String(p.group)]||String(p.group)||null,
-      estado:p.status||'Activo',observacion:p.note||''
-    }));
+  const pendingPeople=local.people.filter(p=>p.localOnly&&p.name.trim()&&!existingNames.has(p.name.trim().toLowerCase()));
+  if(pendingPeople.length){
+    const rows=pendingPeople.map(p=>({nombre:p.name,grupo_id:groupMap[String(p.group)]||String(p.group)||null,estado:p.status||'Activo',observacion:p.note||''}));
     const inserted=await upsert('personas',rows);
-    for(const x of inserted||[]){
-      cloud.people.push({id:String(x.id),name:String(x.nombre??''),group:String(x.grupo_id??''),status:String(x.estado??'Activo'),note:String(x.observacion??'')});
+    for(let i=0;i<(inserted||[]).length;i++){
+      const x=inserted[i],lp=pendingPeople[i];
+      lp.id=String(x.id);lp.localOnly=false;
+      cloud.people.push({id:String(x.id),name:String(x.nombre??lp.name),group:String(x.grupo_id??''),status:String(x.estado??'Activo'),note:String(x.observacion??'')});
     }
   }
 
-  /* Si una persona local pertenece a un grupo creado sin conexión,
-     actualizamos su grupo usando el ID real de Supabase. */
-  for(const lp of local.people){
-    const newGroup=groupMap[String(lp.group)];
-    if(!newGroup)continue;
-    const cp=cloud.people.find(p=>p.name.trim().toLowerCase()===lp.name.trim().toLowerCase());
-    if(cp&&String(cp.group)!==String(newGroup)){
-      await updateRow('personas',cp.id,{grupo_id:newGroup});
-      cp.group=String(newGroup);
-    }
-  }
   return cloud;
 }
 
@@ -255,6 +245,12 @@ async function initCloud(){
     /* Importante: no solo migrar cuando la nube está vacía.
        Así se recuperan grupos creados localmente durante una desconexión. */
     cloud=await syncLocalToCloud(local,cloud);
+    if(local){
+      for(const lg of local.groups||[]){
+        const cg=cloud.groups.find(g=>g.name.trim().toLowerCase()===String(lg.name).trim().toLowerCase());
+        if(cg){const found=cloud.groups.find(g=>String(g.id)===String(cg.id));if(found)found.localOnly=false;}
+      }
+    }
 
     if(cloud.groups.length===0){
       const rows=await upsert('grupos',[{nombre:'Grupo 8',numero:8,descripcion:''}]);
@@ -321,21 +317,27 @@ async function addPerson(){
     if(!inserted?.[0]?.id)throw new Error('Supabase no devolvió el ID de la persona.');
     id=String(inserted[0].id);
   }catch(e){return alert('No se pudo guardar en la nube: '+e.message)}
-  db.people.push({id,name,group,status,note});
+  db.people.push({id,name,group,status,note,localOnly:!cloudReady});
   document.getElementById('pName').value='';document.getElementById('pNote').value='';
   saveLocal();renderAll();toast(cloudReady?'Persona guardada en la nube':'Persona guardada localmente');
 }
 
 async function editPerson(id){
-  const p=db.people.find(x=>x.id===id);if(!p)return;
+  const p=db.people.find(x=>String(x.id)===String(id));if(!p)return;
+  const old={name:p.name,group:String(p.group),status:p.status,note:p.note};
   const name=prompt('Nombre completo:',p.name);if(name===null)return;
-  p.name=name.trim()||p.name;
+  const newName=name.trim()||p.name;
   const group=prompt('ID del grupo para asignar:\n'+db.groups.map(g=>g.id+' = '+g.name).join('\n'),p.group);
-  if(group!==null&&db.groups.some(g=>String(g.id)===String(group)))p.group=String(group);
-  p.status=confirm('¿La persona está activa?')?'Activo':'Inactivo';
-  if(cloudReady)try{await updateRow('personas',id,{nombre:p.name,grupo_id:p.group,estado:p.status,observacion:p.note||''})}
-  catch(e){return alert('No se pudo actualizar en la nube: '+e.message)}
-  saveLocal();renderAll();
+  let newGroup=String(p.group);
+  if(group!==null&&db.groups.some(g=>String(g.id)===String(group)))newGroup=String(group);
+  const newStatus=confirm('¿La persona está activa?')?'Activo':'Inactivo';
+  if(cloudReady){
+    try{await updateRow('personas',id,{nombre:newName,grupo_id:newGroup,estado:newStatus,observacion:p.note||''})}
+    catch(e){return alert('No se pudo actualizar en la nube: '+e.message)}
+  }
+  p.name=newName;p.group=newGroup;p.status=newStatus;
+  if(!cloudReady)p.localOnly=true;
+  saveLocal();renderAll();toast(cloudReady?'Persona actualizada en la nube':'Persona actualizada localmente');
 }
 
 function openChange(id){
@@ -390,28 +392,32 @@ async function addGroup(){
     if(!rows?.[0]?.id)throw new Error('Supabase no devolvió el ID del grupo.');
     id=String(rows[0].id);
   }catch(e){return alert('No se pudo crear el grupo en la nube: '+e.message)}
-  db.groups.push({id,name,number:number??'',description});
+  db.groups.push({id,name,number:number??'',description,localOnly:!cloudReady});
   document.getElementById('gName').value='';document.getElementById('gNumber').value='';document.getElementById('gDescription').value='';
   saveLocal();renderAll();toast(cloudReady?'Grupo creado y guardado en la nube':'Grupo creado localmente');
 }
 
 async function editGroup(id){
   const g=db.groups.find(x=>String(x.id)===String(id));if(!g)return;
-  const n=prompt('Nombre del grupo:',g.name);if(n===null)return;
-  if(n.trim()){
-    g.name=n.trim();
-    if(cloudReady)try{await updateRow('grupos',id,{nombre:g.name,numero:g.number||null,descripcion:g.description||''})}
-    catch(e){return alert('No se pudo actualizar el grupo: '+e.message)}
-    saveLocal();renderAll();
+  const n=prompt('Nombre del grupo:',g.name);if(n===null||!n.trim())return;
+  const newName=n.trim();
+  if(cloudReady){
+    try{await updateRow('grupos',id,{nombre:newName,numero:g.number||null,descripcion:g.description||''})}
+    catch(e){return alert('No se pudo actualizar el grupo en la nube: '+e.message)}
   }
+  g.name=newName;if(!cloudReady)g.localOnly=true;
+  saveLocal();renderAll();toast(cloudReady?'Grupo actualizado en la nube':'Grupo actualizado localmente');
 }
 
 async function removeGroup(id){
   if(db.people.some(p=>String(p.group)===String(id)))return alert('Este grupo tiene personas. Muévelas a otro grupo antes de eliminarlo.');
   if(!confirm('¿Eliminar este grupo?'))return;
-  if(cloudReady)try{await deleteRow('grupos',id)}catch(e){return alert('No se pudo eliminar el grupo en la nube: '+e.message)}
+  if(cloudReady){
+    try{await deleteRow('grupos',id)}
+    catch(e){return alert('No se pudo eliminar el grupo en la nube: '+e.message)}
+  }
   db.groups=db.groups.filter(g=>String(g.id)!==String(id));
-  saveLocal();renderAll();
+  saveLocal();renderAll();toast(cloudReady?'Grupo eliminado de la nube':'Grupo eliminado localmente');
 }
 
 function renderGroups(){
