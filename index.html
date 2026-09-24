@@ -343,7 +343,7 @@ async function editPerson(id){
 function openChange(id){
   const p=db.people.find(x=>x.id===id);if(!p)return;
   const current=db.groups.find(g=>String(g.id)===String(p.group)),select=document.getElementById('changeGroup');
-  select.innerHTML=db.groups.filter(g=>String(g.id)!==String(p.group)).map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+select.innerHTML=db.groups.filter(g=>String(g.id)!==String(p.group)).map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
   if(!select.options.length)return alert('No hay otro grupo disponible. Primero crea otro grupo.');
   document.getElementById('changePersonName').textContent=p.name;
   document.getElementById('changeCurrentGroup').textContent=current?.name||'Sin grupo';
