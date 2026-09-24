@@ -281,9 +281,9 @@ async function initCloud(){
 
 function fillSelect(id,all=false){
   const el=document.getElementById(id);if(!el)return;
-  const old=el.value;
-  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
-  if(db.groups.some(g=>String(g.id)===String(old)))el.value=old;
+  const old=String(el.value||'');
+  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  if(db.groups.some(g=>String(g.id)===old))el.value=old;
   else if(el.options.length)el.value=el.options[0].value;
 }
 
@@ -377,7 +377,9 @@ async function removePerson(id){
 
 function renderPeople(){
   const q=(document.getElementById('peopleSearch')?.value||'').toLowerCase();
-  const arr=db.people.filter(p=>String(p.name||'').toLowerCase().includes(q));
+  const arr=db.people
+    .filter(p=>String(p.name||'').toLowerCase().includes(q))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'es',{sensitivity:'base'}));
   document.getElementById('peopleTable').innerHTML=arr.length?`<table><thead><tr><th>N°</th><th>Nombre</th><th>Grupo</th><th>Estado</th><th>Observación</th><th>Acciones</th></tr></thead><tbody>${arr.map((p,i)=>`<tr><td class="center">${i+1}</td><td>${esc(p.name)}</td><td>${esc(db.groups.find(g=>String(g.id)===String(p.group))?.name||'Sin grupo')}</td><td class="center"><span class="badge">${esc(p.status)}</span></td><td>${esc(p.note)}</td><td class="actions"><button onclick="editPerson('${p.id}')">Editar</button><button class="success" onclick="openChange('${p.id}')">Cambiar</button><button class="danger" onclick="removePerson('${p.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas.</div>';
 }
 
@@ -421,18 +423,31 @@ async function removeGroup(id){
 }
 
 function renderGroups(){
-  document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Número</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${g.number||''}</td><td class="center">${db.people.filter(p=>String(p.group)===String(g.id)).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>';
+  document.getElementById('groupsTable').innerHTML=db.groups.length?`<table><thead><tr><th>N°</th><th>Grupo</th><th>Personas</th><th>Descripción</th><th>Acciones</th></tr></thead><tbody>${db.groups.map((g,i)=>`<tr><td class="center">${i+1}</td><td><b>${esc(g.name)}</b></td><td class="center">${db.people.filter(p=>String(p.group)===String(g.id)).length}</td><td>${esc(g.description)}</td><td class="actions"><button onclick="editGroup('${g.id}')">Editar</button><button class="danger" onclick="removeGroup('${g.id}')">Eliminar</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay grupos.</div>';
 }
 
 function reportKey(){return `${document.getElementById('year').value}|${document.getElementById('month').value}|${document.getElementById('reportGroup').value}`}
-function currentRows(){
-  const gid=document.getElementById('reportGroup').value,q=(document.getElementById('reportSearch').value||'').toLowerCase(),old=db.reports[reportKey()]?.rows||{};
-  return db.people.filter(p=>String(p.group)===String(gid)&&String(p.name||'').toLowerCase().includes(q)).map(p=>Object.assign({id:p.id,name:p.name,predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}));
+function selectedReportGroupId(){
+  const el=document.getElementById('reportGroup');
+  return String(el?.value??'');
 }
+
+function currentRows(){
+  const gid=selectedReportGroupId();
+  const q=String(document.getElementById('reportSearch')?.value||'').trim().toLowerCase();
+  const old=db.reports[reportKey()]?.rows||{};
+  return db.people
+    .filter(p=>String(p.group??'')===gid)
+    .filter(p=>!q||String(p.name||'').toLowerCase().includes(q))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'es',{sensitivity:'base'}))
+    .map(p=>Object.assign({id:String(p.id),name:String(p.name||''),predico:'',estudios:'',horas:'',obs:''},old[p.id]||{}));
+}
+
 function renderReport(){
-  const g=db.groups.find(x=>String(x.id)===String(document.getElementById('reportGroup').value));
-  document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)];
-  document.getElementById('rGroup').textContent=g?.number||g?.name||'';
+  const gid=selectedReportGroupId();
+  const g=db.groups.find(x=>String(x.id)===gid);
+  document.getElementById('rMonth').textContent=months[Number(document.getElementById('month').value)]||'';
+  document.getElementById('rGroup').textContent=g?.name||'';
   const rows=currentRows();
   document.getElementById('reportTable').innerHTML=rows.length?`<table><thead><tr><th>N°</th><th>NOMBRE</th><th>PREDICÓ</th><th>ESTUDIOS</th><th>HORAS</th><th>OBSERVACIONES</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td class="center">${i+1}</td><td>${esc(r.name)}</td><td><input data-id="${r.id}" data-f="predico" value="${esc(r.predico)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="estudios" value="${esc(r.estudios)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="horas" value="${esc(r.horas)}" style="width:100%;border:0;text-align:center"></td><td><input data-id="${r.id}" data-f="obs" value="${esc(r.obs)}" style="width:100%;border:0"></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No hay personas en este grupo.</div>';
 }
@@ -504,7 +519,7 @@ async function restore(file){
 }
 
 renderAll();
-if('serviceWorker' in navigator && location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(e=>console.warn('Service Worker:',e));
+if('serviceWorker' in navigator && location.protocol!=='file:')navigator.serviceWorker.register('sw.js?v=5').catch(e=>console.warn('Service Worker:',e));
 initCloud();
 </script>
 </body></html>
