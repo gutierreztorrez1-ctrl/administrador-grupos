@@ -282,7 +282,7 @@ async function initCloud(){
 function fillSelect(id,all=false){
   const el=document.getElementById(id);if(!el)return;
   const old=el.value;
-  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}${g.number?' ('+g.number+')':''}</option>`).join('');
+  el.innerHTML=(all?'<option value="">Todos</option>':'')+db.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
   if(db.groups.some(g=>String(g.id)===String(old)))el.value=old;
   else if(el.options.length)el.value=el.options[0].value;
 }
